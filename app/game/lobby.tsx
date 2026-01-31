@@ -56,42 +56,42 @@ export default function Lobby({ onStart }: LobbyProps) {
   return (
     <div
       className="h-screen w-screen flex flex-col items-center justify-center gap-8 bg-[#0d0a06] overflow-auto"
-      style={{ fontFamily: "'Cinzel', 'Georgia', serif" }}
+      style={{ fontFamily: "'MedievalSharp', 'Space Grotesk', sans-serif" }}
     >
       {/* Title */}
-      <h1 className="text-amber-400 text-3xl font-bold tracking-widest uppercase drop-shadow-[0_2px_8px_rgba(180,120,40,0.5)]">
+      <h1 className="text-amber-400 text-4xl md:text-5xl font-bold tracking-widest uppercase drop-shadow-[0_2px_8px_rgba(180,120,40,0.5)]">
         Choose Your Champion
       </h1>
 
       {/* Character Selection */}
-      <div className="flex gap-6">
+      <div className="flex gap-8">
         {CHARACTERS.map((c) => {
           const active = selectedChar === c.id;
           return (
             <button
               key={c.id}
               onClick={() => setSelectedChar(c.id)}
-              className={`relative flex flex-col items-center gap-3 p-5 rounded-lg border-2 transition-all w-[220px]
+              className={`relative flex flex-col items-center gap-4 p-6 rounded-xl border-2 transition-all w-[320px]
                 ${active
-                  ? "border-amber-400 bg-amber-900/30 shadow-[0_0_20px_rgba(180,120,40,0.4)]"
+                  ? "border-amber-400 bg-amber-900/30 shadow-[0_0_25px_rgba(180,120,40,0.5)]"
                   : "border-amber-800/50 bg-[#1a1209] hover:border-amber-600 hover:bg-[#1e1710]"
                 }`}
             >
               <Image
                 src={c.spritePath}
                 alt={c.name}
-                width={96}
-                height={96}
+                width={140}
+                height={140}
                 style={{ imageRendering: "pixelated" }}
               />
               <div className="text-center">
-                <p className="text-amber-300 font-bold text-sm">{c.name}</p>
-                <p className="text-amber-600 text-xs italic">{c.title}</p>
-                <p className="text-amber-700 text-[10px] mt-1 leading-tight">{c.archetype}</p>
+                <p className="text-amber-300 font-bold text-2xl">{c.name}</p>
+                <p className="text-amber-600 text-lg italic">{c.title}</p>
+                <p className="text-amber-700 text-base mt-1 leading-tight">{c.archetype}</p>
               </div>
-              <p className="text-amber-600/80 text-[10px] leading-snug text-center">{c.description}</p>
+              <p className="text-amber-600/80 text-base leading-snug text-center">{c.description}</p>
               {active && (
-                <div className="absolute -top-2 -right-2 bg-amber-500 text-black text-[10px] font-bold px-1.5 py-0.5 rounded">
+                <div className="absolute -top-3 -right-3 bg-amber-500 text-black text-sm font-bold px-2 py-1 rounded">
                   ✓
                 </div>
               )}
@@ -102,19 +102,19 @@ export default function Lobby({ onStart }: LobbyProps) {
 
       {/* Battlefield Selection */}
       <div>
-        <h2 className="text-amber-500 text-sm font-bold tracking-wider uppercase text-center mb-3">
+        <h2 className="text-amber-500 text-xl font-bold tracking-wider uppercase text-center mb-4">
           Select Battlefield
         </h2>
-        <div className="flex gap-4">
+        <div className="flex gap-6">
           {BATTLEFIELDS.map((bf) => {
             const active = selectedBf === bf.id;
             return (
               <button
                 key={bf.id}
                 onClick={() => setSelectedBf(bf.id)}
-                className={`relative rounded-lg overflow-hidden border-2 transition-all w-[180px] h-[100px]
+                className={`relative rounded-xl overflow-hidden border-2 transition-all w-[260px] h-[150px]
                   ${active
-                    ? "border-amber-400 shadow-[0_0_15px_rgba(180,120,40,0.4)]"
+                    ? "border-amber-400 shadow-[0_0_20px_rgba(180,120,40,0.5)]"
                     : "border-amber-800/50 hover:border-amber-600 opacity-70 hover:opacity-100"
                   }`}
               >
@@ -125,11 +125,11 @@ export default function Lobby({ onStart }: LobbyProps) {
                   className="object-cover"
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent" />
-                <span className="absolute bottom-1.5 left-0 right-0 text-center text-amber-300 text-xs font-bold drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)]">
+                <span className="absolute bottom-3 left-0 right-0 text-center text-amber-300 text-lg font-bold drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)]">
                   {bf.name}
                 </span>
                 {active && (
-                  <div className="absolute top-1 right-1 bg-amber-500 text-black text-[10px] font-bold px-1.5 py-0.5 rounded">
+                  <div className="absolute top-2 right-2 bg-amber-500 text-black text-sm font-bold px-2 py-1 rounded">
                     ✓
                   </div>
                 )}
@@ -143,9 +143,9 @@ export default function Lobby({ onStart }: LobbyProps) {
       <button
         disabled={!canStart}
         onClick={() => canStart && onStart(selectedChar!, selectedBf!)}
-        className={`px-10 py-3 rounded border-2 font-bold text-sm tracking-widest uppercase transition-all
+        className={`px-14 py-4 rounded-lg border-2 font-bold text-xl tracking-widest uppercase transition-all
           ${canStart
-            ? "bg-amber-800 border-amber-500 text-amber-100 hover:bg-amber-700 hover:shadow-[0_0_20px_rgba(180,120,40,0.5)]"
+            ? "bg-amber-800 border-amber-500 text-amber-100 hover:bg-amber-700 hover:shadow-[0_0_25px_rgba(180,120,40,0.5)]"
             : "bg-[#1a1209] border-amber-900/40 text-amber-800 cursor-not-allowed"
           }`}
       >
@@ -153,7 +153,7 @@ export default function Lobby({ onStart }: LobbyProps) {
       </button>
 
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=MedievalSharp&family=Space+Grotesk:wght@300..700&display=swap');
       `}</style>
     </div>
   );

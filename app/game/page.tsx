@@ -494,7 +494,7 @@ export default function GamePage() {
   }
 
   return (
-    <div className="h-screen w-screen flex flex-col overflow-hidden select-none" style={{ fontFamily: "'Cinzel', 'Georgia', serif" }}>
+    <div className="h-screen w-screen flex flex-col overflow-hidden select-none" style={{ fontFamily: "'MedievalSharp', 'Space Grotesk', sans-serif" }}>
       {/* ===== Battle Scene (top ~60%) ===== */}
       <div
         className="relative flex-1 bg-cover bg-center bg-no-repeat"
@@ -670,7 +670,7 @@ export default function GamePage() {
 
       {/* shake keyframes */}
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=MedievalSharp&family=Space+Grotesk:wght@300..700&display=swap');
         @keyframes shake {
           0%, 100% { transform: translateX(0); }
           25% { transform: translateX(-4px); }
