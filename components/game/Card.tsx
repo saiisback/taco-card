@@ -7,7 +7,11 @@ export type CardType =
   | "clerics_prayer"
   | "shield_wall"
   | "berserk_rage"
-  | "tax_peasantry";
+  | "tax_peasantry"
+  | "iron_judgment"
+  | "fortress_stance"
+  | "phantom_strike"
+  | "smoke_veil";
 
 export interface CardData {
   type: CardType;
@@ -46,6 +50,30 @@ export const CARD_DEFINITIONS: Record<CardType, CardData> = {
     name: "Tax Peasantry",
     description: "+15 Gold",
     image: "/cards/tax.png",
+  },
+  iron_judgment: {
+    type: "iron_judgment",
+    name: "Iron Judgment",
+    description: "-20 Boss HP",
+    image: "/cards/iron-judgment.png",
+  },
+  fortress_stance: {
+    type: "fortress_stance",
+    name: "Fortress Stance",
+    description: "Shield + heal 5 HP",
+    image: "/cards/fortress-stance.png",
+  },
+  phantom_strike: {
+    type: "phantom_strike",
+    name: "Phantom Strike",
+    description: "-25 Boss HP, costs 5 Gold",
+    image: "/cards/phantom-strike.png",
+  },
+  smoke_veil: {
+    type: "smoke_veil",
+    name: "Smoke Veil",
+    description: "Block 100% next attack",
+    image: "/cards/smoke-veil.png",
   },
 };
 
