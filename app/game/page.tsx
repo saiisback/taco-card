@@ -180,6 +180,7 @@ export function triggerBossTurn(
 async function fetchAiBossAction(
   state: Pick<GameState, "heroHp" | "bossHp" | "gold" | "isShielded">
 ): Promise<{ message: string }> {
+  console.log("[TACO] Requesting AI boss action via 0G node...", state);
   const res = await fetch("/api/ai/boss-action", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -187,9 +188,12 @@ async function fetchAiBossAction(
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: "Unknown error" }));
+    console.error("[TACO] AI boss action failed:", err);
     throw new Error(err.error ?? `AI boss action failed: ${res.status}`);
   }
-  return res.json();
+  const result = await res.json();
+  console.log("[TACO] AI boss response:", result.message);
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -318,6 +322,9 @@ export default function GamePage() {
   const [ttsEnabled, setTtsEnabled] = useState(true);
   const prevLogLen = useRef(0);
 
+  // Turn loading state
+  const [turnPhase, setTurnPhase] = useState<"idle" | "hero_attack" | "connecting_node" | "ai_thinking" | "boss_attack">("idle");
+
   // Deposit system state
   const [balance, setBalance] = useState<string | null>(null);
   const [depositing, setDepositing] = useState(false);
@@ -345,12 +352,13 @@ export default function GamePage() {
 
   // Fetch on-chain stats + balance when wallet connects
   const fetchPlayerData = useCallback(async (addr: string) => {
+    console.log(`[TACO] Fetching on-chain data for ${addr}...`);
     try {
       const res = await fetch(`/api/game/record?player=${addr}`);
       if (!res.ok) return;
       const data = await res.json();
-      if (data.stats) setStats(data.stats);
-      if (data.balance !== undefined) setBalance(data.balance);
+      if (data.stats) { setStats(data.stats); console.log("[TACO] Player stats:", data.stats); }
+      if (data.balance !== undefined) { setBalance(data.balance); console.log(`[TACO] Player balance: ${data.balance} A0GI`); }
     } catch {}
   }, []);
 
@@ -364,17 +372,21 @@ export default function GamePage() {
     if (!address || depositing) return;
     setDepositing(true);
     try {
+      console.log(`[TACO] Signing deposit tx: ${depositAmount} A0GI to contract ${GAME_RESULTS_ADDRESS}`);
       const data = encodeFunctionData({ abi: DEPOSIT_ABI, functionName: "deposit" });
-      await sendTransactionAsync({
+      const txHash = await sendTransactionAsync({
         to: GAME_RESULTS_ADDRESS as `0x${string}`,
         data,
         value: parseEther(depositAmount),
       });
+      console.log(`[TACO] Deposit tx signed: ${txHash}`);
+      console.log(`[TACO] Explorer: https://chainscan-galileo.0g.ai/tx/${txHash}`);
       // Wait a moment for chain to update, then refresh balance
       await new Promise((r) => setTimeout(r, 3000));
       await fetchPlayerData(address);
+      console.log("[TACO] Deposit confirmed, balance refreshed");
     } catch (err) {
-      console.error("Deposit failed:", err);
+      console.error("[TACO] Deposit failed:", err);
     } finally {
       setDepositing(false);
     }
@@ -385,15 +397,19 @@ export default function GamePage() {
     if (!address || withdrawing || !balance || parseFloat(balance) <= 0) return;
     setWithdrawing(true);
     try {
+      console.log(`[TACO] Signing withdraw tx from contract ${GAME_RESULTS_ADDRESS}`);
       const data = encodeFunctionData({ abi: WITHDRAW_ABI, functionName: "withdraw" });
-      await sendTransactionAsync({
+      const txHash = await sendTransactionAsync({
         to: GAME_RESULTS_ADDRESS as `0x${string}`,
         data,
       });
+      console.log(`[TACO] Withdraw tx signed: ${txHash}`);
+      console.log(`[TACO] Explorer: https://chainscan-galileo.0g.ai/tx/${txHash}`);
       await new Promise((r) => setTimeout(r, 3000));
       await fetchPlayerData(address);
+      console.log("[TACO] Withdraw confirmed, balance refreshed");
     } catch (err) {
-      console.error("Withdraw failed:", err);
+      console.error("[TACO] Withdraw failed:", err);
     } finally {
       setWithdrawing(false);
     }
@@ -404,6 +420,7 @@ export default function GamePage() {
     const playerAddress = address ?? "0x0000000000000000000000000000000000000000";
     setRecording(true);
     setLastTxUrl(null);
+    console.log(`[TACO] Recording game result on-chain: player=${playerAddress}, won=${won}, heroHp=${heroHp}, bossHp=${bossHp}`);
     try {
       const res = await fetch("/api/game/record", {
         method: "POST",
@@ -412,11 +429,13 @@ export default function GamePage() {
       });
       if (!res.ok) throw new Error(`Record failed: ${res.status}`);
       const data = await res.json();
-      if (data.stats) setStats(data.stats);
-      if (data.balance !== undefined) setBalance(data.balance);
+      if (data.txHash) console.log(`[TACO] Game recorded tx: ${data.txHash}`);
+      if (data.txExplorerUrl) console.log(`[TACO] Explorer: ${data.txExplorerUrl}`);
+      if (data.stats) { setStats(data.stats); console.log("[TACO] Updated stats:", data.stats); }
+      if (data.balance !== undefined) { setBalance(data.balance); console.log(`[TACO] Updated balance: ${data.balance} A0GI`); }
       if (data.txExplorerUrl) setLastTxUrl(data.txExplorerUrl);
     } catch (err) {
-      console.error("Failed to record game on-chain:", err);
+      console.error("[TACO] Failed to record game on-chain:", err);
       throw err;
     } finally {
       setRecording(false);
@@ -441,6 +460,7 @@ export default function GamePage() {
       if (state.turnInProgress || state.gameOver) return;
 
       setState((s) => ({ ...s, turnInProgress: true, heroAnim: "attack" }));
+      setTurnPhase("hero_attack");
 
       // 1. Resolve card
       const result = resolveCardEffect(card, state);
@@ -464,6 +484,7 @@ export default function GamePage() {
 
       if (checked.gameOver) {
         setState((s) => ({ ...s, turnInProgress: false, heroAnim: "idle" }));
+        setTurnPhase("idle");
         recordResult(
           checked.winner === "hero",
           checked.heroHp ?? 0,
@@ -475,6 +496,7 @@ export default function GamePage() {
       // 2. Delay then boss turn
       await new Promise((r) => setTimeout(r, BOSS_TURN_DELAY));
 
+      setTurnPhase("connecting_node");
       setState((s) => ({ ...s, bossShaking: false, heroAnim: "idle", bossAnim: "attack" }));
 
       const currentForBoss = {
@@ -484,7 +506,9 @@ export default function GamePage() {
         isShielded: result.isShielded,
       };
 
+      setTurnPhase("ai_thinking");
       const aiResult = await fetchAiBossAction(currentForBoss);
+      setTurnPhase("boss_attack");
       const bossResult = triggerBossTurn({
         heroHp: result.heroHp,
         isShielded: result.isShielded,
@@ -513,6 +537,7 @@ export default function GamePage() {
         finalState.heroAnim = "death";
       }
       setState((s) => ({ ...s, ...finalState }));
+      setTurnPhase("idle");
 
       if (finalState.gameOver) {
         recordResult(
@@ -559,7 +584,7 @@ export default function GamePage() {
     return <Lobby onStart={handleLobbyStart} />;
   }
 
-  const insufficientBalance = isConnected && !hasEnoughBalance;
+  const insufficientBalance = !isConnected || !hasEnoughBalance;
   const cardsDisabled = state.turnInProgress || state.gameOver || insufficientBalance;
 
   return (
@@ -622,32 +647,49 @@ export default function GamePage() {
           </div>
         )}
 
-        {/* Insufficient balance overlay */}
+        {/* Wallet not connected or insufficient balance overlay */}
         {insufficientBalance && !state.gameOver && (
           <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/60">
             <div className="bg-[#1a1209] border-2 border-amber-700 rounded-lg px-6 py-4 text-center max-w-xs">
-              <p className="text-amber-400 font-bold text-sm mb-2">Deposit to Play</p>
-              <p className="text-amber-600 text-xs mb-3">
-                Each game costs {GAME_FEE} A0GI. Your balance: {balance ?? "0"} A0GI
-              </p>
-              <div className="flex items-center gap-2 justify-center mb-3">
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0.01"
-                  value={depositAmount}
-                  onChange={(e) => setDepositAmount(e.target.value)}
-                  className="bg-black/60 border border-amber-800 text-amber-300 text-xs rounded px-2 py-1 w-20 text-center"
-                />
-                <span className="text-amber-600 text-xs">A0GI</span>
-              </div>
-              <button
-                onClick={handleDeposit}
-                disabled={depositing}
-                className="bg-amber-800 text-amber-100 px-4 py-1.5 rounded border border-amber-600 font-bold text-xs tracking-wider uppercase hover:bg-amber-700 transition-colors disabled:opacity-50"
-              >
-                {depositing ? "Confirming..." : "Deposit"}
-              </button>
+              {!isConnected ? (
+                <>
+                  <p className="text-amber-400 font-bold text-sm mb-2">Connect Wallet to Play</p>
+                  <p className="text-amber-600 text-xs mb-3">
+                    You need to connect your wallet and deposit funds to play.
+                  </p>
+                  <button
+                    onClick={() => connect({ connector: injected() })}
+                    className="bg-amber-800 text-amber-100 px-4 py-1.5 rounded border border-amber-600 font-bold text-xs tracking-wider uppercase hover:bg-amber-700 transition-colors"
+                  >
+                    Connect Wallet
+                  </button>
+                </>
+              ) : (
+                <>
+                  <p className="text-amber-400 font-bold text-sm mb-2">Deposit to Play</p>
+                  <p className="text-amber-600 text-xs mb-3">
+                    Each game costs {GAME_FEE} A0GI. Your balance: {balance ?? "0"} A0GI
+                  </p>
+                  <div className="flex items-center gap-2 justify-center mb-3">
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0.01"
+                      value={depositAmount}
+                      onChange={(e) => setDepositAmount(e.target.value)}
+                      className="bg-black/60 border border-amber-800 text-amber-300 text-xs rounded px-2 py-1 w-20 text-center"
+                    />
+                    <span className="text-amber-600 text-xs">A0GI</span>
+                  </div>
+                  <button
+                    onClick={handleDeposit}
+                    disabled={depositing}
+                    className="bg-amber-800 text-amber-100 px-4 py-1.5 rounded border border-amber-600 font-bold text-xs tracking-wider uppercase hover:bg-amber-700 transition-colors disabled:opacity-50"
+                  >
+                    {depositing ? "Confirming..." : "Deposit"}
+                  </button>
+                </>
+              )}
             </div>
           </div>
         )}
@@ -773,6 +815,18 @@ export default function GamePage() {
 
             {/* Right: Story dialogue */}
             <div className="flex-1 rounded border border-amber-900/60 bg-[#1e1710] px-4 py-3 overflow-y-auto max-h-[160px]">
+              {/* Turn phase loading indicator */}
+              {turnPhase !== "idle" && (
+                <div className="flex items-center gap-2 mb-2 px-1 py-1.5 rounded bg-black/40 border border-amber-900/40">
+                  <span className="inline-block w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+                  <span className="text-[11px] text-amber-400 tracking-wide">
+                    {turnPhase === "hero_attack" && "Resolving your move..."}
+                    {turnPhase === "connecting_node" && "Connecting to 0G AI node..."}
+                    {turnPhase === "ai_thinking" && "Overlord is deciding next move..."}
+                    {turnPhase === "boss_attack" && "Overlord attacks!"}
+                  </span>
+                </div>
+              )}
               {state.log.map((entry, i) => (
                 <p key={i} className={`text-sm leading-relaxed italic ${i === state.log.length - 1 ? "text-amber-300" : "text-amber-700"}`}>
                   {entry}
