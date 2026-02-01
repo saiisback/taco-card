@@ -192,6 +192,11 @@ async function fetchAiBossAction(
     throw new Error(err.error ?? `AI boss action failed: ${res.status}`);
   }
   const result = await res.json();
+  if (result.debug) {
+    console.groupCollapsed("[TACO] 0G AI Node Debug Info");
+    result.debug.forEach((line: string) => console.log(line));
+    console.groupEnd();
+  }
   console.log("[TACO] AI boss response:", result.message);
   return result;
 }
@@ -429,6 +434,11 @@ export default function GamePage() {
       });
       if (!res.ok) throw new Error(`Record failed: ${res.status}`);
       const data = await res.json();
+      if (data.debug) {
+        console.groupCollapsed("[TACO] On-Chain Record Debug Info");
+        data.debug.forEach((line: string) => console.log(line));
+        console.groupEnd();
+      }
       if (data.txHash) console.log(`[TACO] Game recorded tx: ${data.txHash}`);
       if (data.txExplorerUrl) console.log(`[TACO] Explorer: ${data.txExplorerUrl}`);
       if (data.stats) { setStats(data.stats); console.log("[TACO] Updated stats:", data.stats); }

@@ -44,39 +44,68 @@ async function ensureProviderAccount(providerAddress: string) {
 
 export async function POST(req: NextRequest) {
   const body = (await req.json()) as BossActionPayload;
+  const debug: string[] = [];
 
+  debug.push(`[0G] Initializing broker & fetching services...`);
   const broker = await getBroker();
   const services = await broker.inference.listService();
 
   if (!services || services.length === 0) {
-    return NextResponse.json({ error: "No 0G AI services available" }, { status: 503 });
+    return NextResponse.json({ error: "No 0G AI services available", debug }, { status: 503 });
   }
 
   // Pick the first available service
-  // ServiceStructOutput is a tuple: [provider, serviceType, url, inputPrice, outputPrice, updatedAt, model, ...]
+  // ServiceStructOutput is a tuple: [provider, serviceType, url, inputPrice, outputPrice, updatedAt, model, teeType, metadata, signerAddress, occupied]
   const service = services[0];
   const providerAddress = service[0];
   const serviceType = service[1]; // e.g. "chatbot"
   const endpoint = service[2];
+  const inputPrice = service[3];
+  const outputPrice = service[4];
   const model = service[6];
+  const teeType = service[7];
+  const metadata = service[8];
+  const signerAddress = service[9];
+
+  debug.push(`[0G] Service discovered:`);
+  debug.push(`  Provider: ${providerAddress}`);
+  debug.push(`  Service Type: ${serviceType}`);
+  debug.push(`  Endpoint: ${endpoint}`);
+  debug.push(`  Model: ${model}`);
+  debug.push(`  TEE Type: ${teeType}`);
+  debug.push(`  Signer: ${signerAddress}`);
+  debug.push(`  Input Price: ${inputPrice?.toString()}`);
+  debug.push(`  Output Price: ${outputPrice?.toString()}`);
+
+  // Parse metadata for TEE details
+  try {
+    const meta = JSON.parse(metadata as string);
+    if (meta.ImageName) debug.push(`  Image: ${meta.ImageName}`);
+    if (meta.TEEVerifier) debug.push(`  TEE Verifier: ${meta.TEEVerifier}`);
+    if (meta.TargetTeeAddress) debug.push(`  TEE Address: ${meta.TargetTeeAddress}`);
+  } catch {}
 
   console.log(`[DEBUG] Using provider=${providerAddress}, serviceType=${serviceType}, model=${model}`);
 
   // Ensure the sub-account exists and provider signer is acknowledged
   try {
+    debug.push(`[0G] Acknowledging provider signer...`);
     await ensureProviderAccount(providerAddress);
+    debug.push(`[0G] Provider acknowledged`);
   } catch (e: any) {
     console.error("[0G] ensureProviderAccount failed:", e?.message);
-    return NextResponse.json({ error: "Failed to setup provider account" }, { status: 500 });
+    return NextResponse.json({ error: "Failed to setup provider account", debug }, { status: 500 });
   }
 
   const userContent = `Game state: Hero HP=${body.heroHp}, Boss HP=${body.bossHp}, Gold=${body.gold}, Shielded=${body.isShielded}. Respond with a short boss taunt.`;
 
+  debug.push(`[0G] Getting request headers (signing + fee settlement)...`);
   // getRequestHeaders internally calls topUpAccountIfNeeded which handles transferFund
   const headers = await broker.inference.getRequestHeaders(
     providerAddress,
     userContent
   );
+  debug.push(`[0G] Request headers obtained, sending inference request...`);
 
   const chatRes = await fetch(`${endpoint}/v1/proxy/chat/completions`, {
     method: "POST",
@@ -94,23 +123,28 @@ export async function POST(req: NextRequest) {
   if (!chatRes.ok) {
     const errText = await chatRes.text();
     console.error("0G AI response not ok:", chatRes.status, errText);
-    return NextResponse.json({ error: `0G AI error: ${chatRes.status}` }, { status: 502 });
+    debug.push(`[0G] AI inference FAILED: ${chatRes.status} ${errText}`);
+    return NextResponse.json({ error: `0G AI error: ${chatRes.status}`, debug }, { status: 502 });
   }
 
   const data = await chatRes.json();
   const chatId: string | undefined = data.id;
   const aiMessage: string | undefined = data.choices?.[0]?.message?.content;
 
+  debug.push(`[0G] Inference response received (chatId: ${chatId})`);
+
   if (!aiMessage) {
-    return NextResponse.json({ error: "No message in AI response" }, { status: 502 });
+    return NextResponse.json({ error: "No message in AI response", debug }, { status: 502 });
   }
 
   // Settle fees — pass chatId from the response
+  debug.push(`[0G] Settling fees (processResponse)...`);
   await broker.inference.processResponse(
     providerAddress,
     chatId,
     aiMessage
   );
+  debug.push(`[0G] Fees settled successfully`);
 
-  return NextResponse.json({ message: aiMessage });
+  return NextResponse.json({ message: aiMessage, debug });
 }
