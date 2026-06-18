@@ -5,6 +5,7 @@ import { useAccount, useConnect, useDisconnect } from "wagmi";
 import { injected } from "wagmi/connectors";
 import Card, { type CardType, CARD_DEFINITIONS } from "@/components/game/Card";
 import SpriteAnimator from "@/components/game/SpriteAnimator";
+import Lobby, { type CharacterId, type BattlefieldId } from "./lobby";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -17,6 +18,7 @@ interface GameState {
   bossHp: number;
   gold: number;
   isShielded: boolean;
+  fullShield: boolean;
   hand: CardType[];
   log: string[];
   turnInProgress: boolean;
@@ -31,7 +33,11 @@ interface GameState {
 // Constants
 // ---------------------------------------------------------------------------
 
-const ALL_CARDS: CardType[] = Object.keys(CARD_DEFINITIONS) as CardType[];
+const SHARED_CARDS: CardType[] = ["clerics_prayer", "tax_peasantry", "berserk_rage"];
+const CHARACTER_CARDS: Record<CharacterId, CardType[]> = {
+  kael: [...SHARED_CARDS, "iron_judgment", "fortress_stance"],
+  lyra: [...SHARED_CARDS, "phantom_strike", "smoke_veil"],
+};
 const HAND_SIZE = 3;
 const REROLL_COST = 5;
 const BOSS_MIN_DMG = 10;
@@ -42,10 +48,10 @@ const BOSS_TURN_DELAY = 800;
 // Pure helpers (no state mutation)
 // ---------------------------------------------------------------------------
 
-function sampleHand(): CardType[] {
+function sampleHand(pool: CardType[]): CardType[] {
   const hand: CardType[] = [];
   for (let i = 0; i < HAND_SIZE; i++) {
-    hand.push(ALL_CARDS[Math.floor(Math.random() * ALL_CARDS.length)]);
+    hand.push(pool[Math.floor(Math.random() * pool.length)]);
   }
   return hand;
 }
@@ -61,16 +67,18 @@ function clamp(val: number, min: number, max: number) {
 
 export function resolveCardEffect(
   card: CardType,
-  current: Pick<GameState, "heroHp" | "bossHp" | "gold" | "isShielded">
+  current: Pick<GameState, "heroHp" | "bossHp" | "gold" | "isShielded" | "fullShield">
 ): {
   heroHp: number;
   bossHp: number;
   gold: number;
   isShielded: boolean;
+  fullShield: boolean;
   log: string;
   bossDamaged: boolean;
 } {
   let { heroHp, bossHp, gold, isShielded } = current;
+  let fullShield = current.fullShield;
   let log = "";
   let bossDamaged = false;
 
@@ -86,6 +94,7 @@ export function resolveCardEffect(
       break;
     case "shield_wall":
       isShielded = true;
+      fullShield = false;
       log = "Shield Wall raised! Next attack blocked 50%.";
       break;
     case "berserk_rage":
@@ -98,9 +107,35 @@ export function resolveCardEffect(
       gold += 15;
       log = "Tax Peasantry collects 15 Gold.";
       break;
+    case "iron_judgment":
+      bossHp = clamp(bossHp - 20, 0, 100);
+      log = "Iron Judgment crashes down for 20 damage!";
+      bossDamaged = true;
+      break;
+    case "fortress_stance":
+      isShielded = true;
+      fullShield = false;
+      heroHp = clamp(heroHp + 5, 0, 100);
+      log = "Fortress Stance! Shield raised and 5 HP restored.";
+      break;
+    case "phantom_strike":
+      if (gold >= 5) {
+        gold -= 5;
+        bossHp = clamp(bossHp - 25, 0, 100);
+        log = "Phantom Strike deals 25 damage! (-5 Gold)";
+        bossDamaged = true;
+      } else {
+        log = "Phantom Strike fizzles... not enough Gold!";
+      }
+      break;
+    case "smoke_veil":
+      isShielded = true;
+      fullShield = true;
+      log = "Smoke Veil! Next attack fully blocked.";
+      break;
   }
 
-  return { heroHp, bossHp, gold, isShielded, log, bossDamaged };
+  return { heroHp, bossHp, gold, isShielded, fullShield, log, bossDamaged };
 }
 
 // ---------------------------------------------------------------------------
@@ -109,8 +144,8 @@ export function resolveCardEffect(
 // ---------------------------------------------------------------------------
 
 export function triggerBossTurn(
-  current: Pick<GameState, "heroHp" | "isShielded">
-): { heroHp: number; isShielded: boolean; log: string } {
+  current: Pick<GameState, "heroHp" | "isShielded" | "fullShield">
+): { heroHp: number; isShielded: boolean; fullShield: boolean; log: string } {
   const rawDmg =
     Math.floor(Math.random() * (BOSS_MAX_DMG - BOSS_MIN_DMG + 1)) + BOSS_MIN_DMG;
 
@@ -118,14 +153,19 @@ export function triggerBossTurn(
   let shieldNote = "";
 
   if (current.isShielded) {
-    actualDmg = Math.floor(rawDmg * 0.5);
-    shieldNote = " (shielded!)";
+    if (current.fullShield) {
+      actualDmg = 0;
+      shieldNote = " (fully blocked!)";
+    } else {
+      actualDmg = Math.floor(rawDmg * 0.5);
+      shieldNote = " (shielded!)";
+    }
   }
 
   const heroHp = clamp(current.heroHp - actualDmg, 0, 100);
   const log = `Overlord strikes for ${actualDmg} damage${shieldNote}`;
 
-  return { heroHp, isShielded: false, log };
+  return { heroHp, isShielded: false, fullShield: false, log };
 }
 
 // ---------------------------------------------------------------------------
@@ -152,9 +192,14 @@ async function fetchAiBossAction(
 // Component
 // ---------------------------------------------------------------------------
 
-// Sprite animation configs
-const SPRITE_CONFIG = {
-  hero: {
+// Sprite animation configs per character
+type SpriteConfig = {
+  basePath: string;
+  anims: Record<SpriteAnim, { folder: string; prefix: string; frames: number }>;
+};
+
+const HERO_SPRITES: Record<CharacterId, SpriteConfig> = {
+  kael: {
     basePath: "/assets/Knight",
     anims: {
       idle:   { folder: "Idle",   prefix: "idle",   frames: 12 },
@@ -163,24 +208,35 @@ const SPRITE_CONFIG = {
       death:  { folder: "Death",  prefix: "death",  frames: 10 },
     },
   },
-  boss: {
-    basePath: "/assets/Mage",
+  lyra: {
+    basePath: "/assets/Rogue",
     anims: {
-      idle:   { folder: "Idle",       prefix: "idle",         frames: 14 },
-      attack: { folder: "Fire",       prefix: "fire",         frames: 9 },
-      hurt:   { folder: "Hurt",       prefix: "hurt",         frames: 4 },
-      death:  { folder: "Death",      prefix: "death",        frames: 10 },
+      idle:   { folder: "Idle",   prefix: "idle",   frames: 12 },
+      attack: { folder: "Attack_Extra", prefix: "attack_extra", frames: 8 },
+      hurt:   { folder: "Hurt",   prefix: "hurt",   frames: 4 },
+      death:  { folder: "Death",  prefix: "death",  frames: 10 },
     },
+  },
+};
+
+const BOSS_SPRITE_CONFIG = {
+  basePath: "/assets/Mage",
+  anims: {
+    idle:   { folder: "Idle",       prefix: "idle",         frames: 14 },
+    attack: { folder: "Fire",       prefix: "fire",         frames: 9 },
+    hurt:   { folder: "Hurt",       prefix: "hurt",         frames: 4 },
+    death:  { folder: "Death",      prefix: "death",        frames: 10 },
   },
 } as const;
 
-function createInitialState(): GameState {
+function createInitialState(cardPool: CardType[]): GameState {
   return {
     heroHp: 100,
     bossHp: 100,
     gold: 50,
     isShielded: false,
-    hand: sampleHand(),
+    fullShield: false,
+    hand: sampleHand(cardPool),
     log: ["A new quest begins..."],
     turnInProgress: false,
     bossShaking: false,
@@ -198,38 +254,56 @@ interface OnChainStats {
 }
 
 // ---------------------------------------------------------------------------
-// TTS – speaks game log lines aloud using the Web Speech API.
-// Boss AI lines get a deeper pitch; hero actions get a normal voice.
+// TTS – speaks game log lines aloud using ElevenLabs.
+// Boss AI lines use a deep male voice; hero actions use a female voice.
 // ---------------------------------------------------------------------------
 
-function speak(text: string) {
-  if (typeof window === "undefined" || !window.speechSynthesis) return;
-  window.speechSynthesis.cancel(); // stop any ongoing speech
+let currentAudio: HTMLAudioElement | null = null;
+
+async function speak(text: string) {
+  if (typeof window === "undefined") return;
+
+  // Stop any ongoing speech
+  if (currentAudio) {
+    currentAudio.pause();
+    currentAudio = null;
+  }
 
   // Strip the "AI: " wrapper to read just the taunt
   const aiMatch = text.match(/— AI: "(.+)"$/);
-  const isBossLine = text.startsWith("Overlord") || !!aiMatch;
+  const isBoss = text.startsWith("Overlord") || !!aiMatch;
+  const cleanText = aiMatch ? aiMatch[1] : text;
 
-  const utterance = new SpeechSynthesisUtterance(aiMatch ? aiMatch[1] : text);
-  utterance.rate = isBossLine ? 0.85 : 1;
-  utterance.pitch = isBossLine ? 0.6 : 1;
-  utterance.volume = 0.9;
+  try {
+    const res = await fetch("/api/tts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: cleanText, isBoss }),
+    });
+    if (!res.ok) return;
 
-  // Try to pick a deeper voice for the boss
-  const voices = window.speechSynthesis.getVoices();
-  if (voices.length > 0) {
-    const preferred = isBossLine
-      ? voices.find((v) => /daniel|thomas|male/i.test(v.name))
-      : voices.find((v) => /samantha|female|fiona/i.test(v.name));
-    if (preferred) utterance.voice = preferred;
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    audio.volume = 0.9;
+    currentAudio = audio;
+    audio.onended = () => {
+      URL.revokeObjectURL(url);
+      if (currentAudio === audio) currentAudio = null;
+    };
+    await audio.play();
+  } catch {
+    // silently fail – game continues without voice
   }
-
-  window.speechSynthesis.speak(utterance);
 }
 
 export default function GamePage() {
   const [mounted, setMounted] = useState(false);
-  const [state, setState] = useState<GameState>(createInitialState);
+  const [phase, setPhase] = useState<"lobby" | "battle">("lobby");
+  const [selectedChar, setSelectedChar] = useState<CharacterId>("kael");
+  const [selectedBf, setSelectedBf] = useState<BattlefieldId>(1);
+  const cardPool = CHARACTER_CARDS[selectedChar];
+  const [state, setState] = useState<GameState>(() => createInitialState(cardPool));
   const [stats, setStats] = useState<OnChainStats | null>(null);
   const [recording, setRecording] = useState(false);
   const [lastTxUrl, setLastTxUrl] = useState<string | null>(null);
@@ -310,6 +384,7 @@ export default function GamePage() {
         bossHp: result.bossHp,
         gold: result.gold,
         isShielded: result.isShielded,
+        fullShield: result.fullShield,
         log: [...state.log, result.log],
         bossShaking: result.bossDamaged,
         bossAnim: result.bossDamaged ? "hurt" : "idle",
@@ -347,6 +422,7 @@ export default function GamePage() {
       const bossResult = triggerBossTurn({
         heroHp: result.heroHp,
         isShielded: result.isShielded,
+        fullShield: result.fullShield,
       });
 
       const bossLog = `${bossResult.log} — AI: "${aiResult.message}"`;
@@ -358,8 +434,9 @@ export default function GamePage() {
       const afterBoss: Partial<GameState> = {
         heroHp: bossResult.heroHp,
         isShielded: bossResult.isShielded,
+        fullShield: bossResult.fullShield,
         log: [...(checked.log ?? state.log), bossLog],
-        hand: sampleHand(),
+        hand: sampleHand(cardPool),
         turnInProgress: false,
         heroAnim: "idle",
         bossAnim: "idle",
@@ -388,16 +465,23 @@ export default function GamePage() {
     setState((s) => ({
       ...s,
       gold: s.gold - REROLL_COST,
-      hand: sampleHand(),
+      hand: sampleHand(cardPool),
       log: [...s.log, `Taco Shuffle! (-${REROLL_COST} Gold)`],
     }));
   }, [state.gold, state.turnInProgress, state.gameOver]);
 
   // ---- Restart ----
-  const restart = () => { setState(createInitialState()); setLastTxUrl(null); };
+  const restart = () => { setState(createInitialState(cardPool)); setLastTxUrl(null); };
 
-  // Pick a random battle bg on mount
-  const [bgIndex] = useState(() => Math.floor(Math.random() * 3) + 1);
+  // Lobby start handler
+  const handleLobbyStart = useCallback((char: CharacterId, bf: BattlefieldId) => {
+    setSelectedChar(char);
+    setSelectedBf(bf);
+    setState(createInitialState(CHARACTER_CARDS[char]));
+    setPhase("battle");
+  }, []);
+
+  const heroSprites = HERO_SPRITES[selectedChar];
   const lastLog = state.log[state.log.length - 1] ?? "";
 
   // ---- Render ----
@@ -405,12 +489,16 @@ export default function GamePage() {
     return <div className="h-screen bg-black" />;
   }
 
+  if (phase === "lobby") {
+    return <Lobby onStart={handleLobbyStart} />;
+  }
+
   return (
     <div className="h-screen w-screen flex flex-col overflow-hidden select-none" style={{ fontFamily: "'Cinzel', 'Georgia', serif" }}>
       {/* ===== Battle Scene (top ~60%) ===== */}
       <div
         className="relative flex-1 bg-cover bg-center bg-no-repeat"
-        style={{ backgroundImage: `url('/battle-bg/battle${bgIndex}.png')` }}
+        style={{ backgroundImage: `url('/battle-bg/battle${selectedBf}.png')` }}
       >
         {/* Dark vignette overlay */}
         <div className="absolute inset-0 pointer-events-none" style={{
@@ -435,7 +523,7 @@ export default function GamePage() {
 
         {/* TTS toggle */}
         <button
-          onClick={() => { setTtsEnabled((v) => !v); window.speechSynthesis?.cancel(); }}
+          onClick={() => { setTtsEnabled((v) => !v); if (currentAudio) { currentAudio.pause(); currentAudio = null; } }}
           className="absolute top-2 left-[50%] -translate-x-1/2 z-10 bg-black/70 text-amber-300 text-[10px] px-2 py-0.5 rounded border border-amber-800/50"
         >
           {ttsEnabled ? "Voice ON" : "Voice OFF"}
@@ -479,7 +567,7 @@ export default function GamePage() {
           <div className="bg-[#1a1209] border-2 border-amber-700 rounded px-3 py-2 shadow-[0_0_15px_rgba(180,120,40,0.3)]"
                style={{ backgroundImage: "linear-gradient(135deg, #1a1209 0%, #2a1f10 50%, #1a1209 100%)" }}>
             <div className="flex justify-between items-center">
-              <span className="text-amber-400 font-bold text-sm tracking-wider uppercase">Hero</span>
+              <span className="text-amber-400 font-bold text-sm tracking-wider uppercase">{selectedChar === "kael" ? "Kael" : "Lyra"}</span>
               <span className="text-amber-600 text-xs italic">Lv.42</span>
             </div>
             <div className="mt-1.5 flex items-center gap-1.5">
@@ -506,10 +594,10 @@ export default function GamePage() {
         {/* ----- Boss Sprite (left side, facing right) ----- */}
         <div className="absolute bottom-[20%] left-[25%] z-10 -translate-x-1/2">
           <SpriteAnimator
-            basePath={SPRITE_CONFIG.boss.basePath}
-            animation={SPRITE_CONFIG.boss.anims[state.bossAnim].folder}
-            prefix={SPRITE_CONFIG.boss.anims[state.bossAnim].prefix}
-            frameCount={SPRITE_CONFIG.boss.anims[state.bossAnim].frames}
+            basePath={BOSS_SPRITE_CONFIG.basePath}
+            animation={BOSS_SPRITE_CONFIG.anims[state.bossAnim].folder}
+            prefix={BOSS_SPRITE_CONFIG.anims[state.bossAnim].prefix}
+            frameCount={BOSS_SPRITE_CONFIG.anims[state.bossAnim].frames}
             fps={state.bossAnim === "idle" ? 120 : 80}
             loop={state.bossAnim === "idle"}
             flip
@@ -520,10 +608,10 @@ export default function GamePage() {
         {/* ----- Hero Sprite (right side, facing left) ----- */}
         <div className="absolute top-[20%] right-[25%] z-10 translate-x-1/2">
           <SpriteAnimator
-            basePath={SPRITE_CONFIG.hero.basePath}
-            animation={SPRITE_CONFIG.hero.anims[state.heroAnim].folder}
-            prefix={SPRITE_CONFIG.hero.anims[state.heroAnim].prefix}
-            frameCount={SPRITE_CONFIG.hero.anims[state.heroAnim].frames}
+            basePath={heroSprites.basePath}
+            animation={heroSprites.anims[state.heroAnim].folder}
+            prefix={heroSprites.anims[state.heroAnim].prefix}
+            frameCount={heroSprites.anims[state.heroAnim].frames}
             fps={state.heroAnim === "idle" ? 120 : 80}
             loop={state.heroAnim === "idle"}
             size={280}
