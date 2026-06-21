@@ -1,11 +1,14 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef } from "react";
-import { useAccount, useConnect, useDisconnect } from "wagmi";
+import { useAccount, useConnect, useDisconnect, useSendTransaction } from "wagmi";
+import { parseEther, encodeFunctionData } from "viem";
 import { injected } from "wagmi/connectors";
 import Card, { type CardType, CARD_DEFINITIONS } from "@/components/game/Card";
 import SpriteAnimator from "@/components/game/SpriteAnimator";
 import Lobby, { type CharacterId, type BattlefieldId } from "./lobby";
+// Inline the contract address to avoid importing gameContract.ts (which pulls in Node.js-only 0g SDK)
+const GAME_RESULTS_ADDRESS = "0xa8D1375737ba0D5fEEF362b2D430D3CD592CCf4C";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -43,6 +46,7 @@ const REROLL_COST = 5;
 const BOSS_MIN_DMG = 10;
 const BOSS_MAX_DMG = 20;
 const BOSS_TURN_DELAY = 800;
+const GAME_FEE = 0.01; // A0GI per game
 
 // ---------------------------------------------------------------------------
 // Pure helpers (no state mutation)
@@ -297,6 +301,10 @@ async function speak(text: string) {
   }
 }
 
+// Deposit ABI for encoding
+const DEPOSIT_ABI = [{ type: "function", name: "deposit", inputs: [], outputs: [], stateMutability: "payable" }] as const;
+const WITHDRAW_ABI = [{ type: "function", name: "withdraw", inputs: [], outputs: [], stateMutability: "nonpayable" }] as const;
+
 export default function GamePage() {
   const [mounted, setMounted] = useState(false);
   const [phase, setPhase] = useState<"lobby" | "battle">("lobby");
@@ -309,6 +317,12 @@ export default function GamePage() {
   const [lastTxUrl, setLastTxUrl] = useState<string | null>(null);
   const [ttsEnabled, setTtsEnabled] = useState(true);
   const prevLogLen = useRef(0);
+
+  // Deposit system state
+  const [balance, setBalance] = useState<string | null>(null);
+  const [depositing, setDepositing] = useState(false);
+  const [withdrawing, setWithdrawing] = useState(false);
+  const [depositAmount, setDepositAmount] = useState("0.1");
 
   useEffect(() => { setMounted(true); }, []);
 
@@ -325,14 +339,65 @@ export default function GamePage() {
   const { address, isConnected } = useAccount();
   const { connect } = useConnect();
   const { disconnect } = useDisconnect();
+  const { sendTransactionAsync } = useSendTransaction();
 
-  // Fetch on-chain stats when wallet connects
+  const hasEnoughBalance = balance !== null && parseFloat(balance) >= GAME_FEE;
+
+  // Fetch on-chain stats + balance when wallet connects
+  const fetchPlayerData = useCallback(async (addr: string) => {
+    try {
+      const res = await fetch(`/api/game/record?player=${addr}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.stats) setStats(data.stats);
+      if (data.balance !== undefined) setBalance(data.balance);
+    } catch {}
+  }, []);
+
   useEffect(() => {
-    if (!address) { setStats(null); return; }
-    fetch(`/api/game/record?player=${address}`)
-      .then(() => {})
-      .catch(() => {});
-  }, [address]);
+    if (!address) { setStats(null); setBalance(null); return; }
+    fetchPlayerData(address);
+  }, [address, fetchPlayerData]);
+
+  // Deposit handler
+  const handleDeposit = useCallback(async () => {
+    if (!address || depositing) return;
+    setDepositing(true);
+    try {
+      const data = encodeFunctionData({ abi: DEPOSIT_ABI, functionName: "deposit" });
+      await sendTransactionAsync({
+        to: GAME_RESULTS_ADDRESS as `0x${string}`,
+        data,
+        value: parseEther(depositAmount),
+      });
+      // Wait a moment for chain to update, then refresh balance
+      await new Promise((r) => setTimeout(r, 3000));
+      await fetchPlayerData(address);
+    } catch (err) {
+      console.error("Deposit failed:", err);
+    } finally {
+      setDepositing(false);
+    }
+  }, [address, depositing, depositAmount, sendTransactionAsync, fetchPlayerData]);
+
+  // Withdraw handler
+  const handleWithdraw = useCallback(async () => {
+    if (!address || withdrawing || !balance || parseFloat(balance) <= 0) return;
+    setWithdrawing(true);
+    try {
+      const data = encodeFunctionData({ abi: WITHDRAW_ABI, functionName: "withdraw" });
+      await sendTransactionAsync({
+        to: GAME_RESULTS_ADDRESS as `0x${string}`,
+        data,
+      });
+      await new Promise((r) => setTimeout(r, 3000));
+      await fetchPlayerData(address);
+    } catch (err) {
+      console.error("Withdraw failed:", err);
+    } finally {
+      setWithdrawing(false);
+    }
+  }, [address, withdrawing, balance, sendTransactionAsync, fetchPlayerData]);
 
   // Record game result on-chain
   const recordResult = useCallback(async (won: boolean, heroHp: number, bossHp: number) => {
@@ -348,6 +413,7 @@ export default function GamePage() {
       if (!res.ok) throw new Error(`Record failed: ${res.status}`);
       const data = await res.json();
       if (data.stats) setStats(data.stats);
+      if (data.balance !== undefined) setBalance(data.balance);
       if (data.txExplorerUrl) setLastTxUrl(data.txExplorerUrl);
     } catch (err) {
       console.error("Failed to record game on-chain:", err);
@@ -493,6 +559,9 @@ export default function GamePage() {
     return <Lobby onStart={handleLobbyStart} />;
   }
 
+  const insufficientBalance = isConnected && !hasEnoughBalance;
+  const cardsDisabled = state.turnInProgress || state.gameOver || insufficientBalance;
+
   return (
     <div className="h-screen w-screen flex flex-col overflow-hidden select-none" style={{ fontFamily: "'MedievalSharp', 'Space Grotesk', sans-serif" }}>
       {/* ===== Battle Scene (top ~60%) ===== */}
@@ -505,12 +574,28 @@ export default function GamePage() {
           background: "radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.5) 100%)"
         }} />
 
-        {/* Wallet badge - top left */}
-        <div className="absolute top-2 left-2 z-10">
+        {/* Wallet badge + balance - top left */}
+        <div className="absolute top-2 left-2 z-10 flex items-center gap-1.5">
           {isConnected ? (
-            <button onClick={() => disconnect()} className="bg-black/70 text-amber-300 text-[10px] px-2 py-0.5 rounded border border-amber-800/50">
-              {address?.slice(0, 6)}...{address?.slice(-4)}
-            </button>
+            <>
+              <button onClick={() => disconnect()} className="bg-black/70 text-amber-300 text-[10px] px-2 py-0.5 rounded border border-amber-800/50">
+                {address?.slice(0, 6)}...{address?.slice(-4)}
+              </button>
+              {balance !== null && (
+                <span className="bg-black/70 text-amber-400 text-[10px] px-2 py-0.5 rounded border border-amber-800/50">
+                  {parseFloat(balance).toFixed(3)} A0GI
+                </span>
+              )}
+              {balance !== null && parseFloat(balance) > 0 && (
+                <button
+                  onClick={handleWithdraw}
+                  disabled={withdrawing}
+                  className="bg-black/70 text-red-400 text-[10px] px-1.5 py-0.5 rounded border border-red-800/50 hover:bg-red-900/40 disabled:opacity-50"
+                >
+                  {withdrawing ? "..." : "Withdraw"}
+                </button>
+              )}
+            </>
           ) : (
             <button
               onClick={() => connect({ connector: injected() })}
@@ -534,6 +619,36 @@ export default function GamePage() {
           <div className="absolute top-2 right-2 z-10 bg-black/70 text-amber-300 text-[10px] px-2 py-0.5 rounded border border-amber-800/50 flex gap-2">
             <span>W:{stats.wins}</span>
             <span>L:{stats.losses}</span>
+          </div>
+        )}
+
+        {/* Insufficient balance overlay */}
+        {insufficientBalance && !state.gameOver && (
+          <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/60">
+            <div className="bg-[#1a1209] border-2 border-amber-700 rounded-lg px-6 py-4 text-center max-w-xs">
+              <p className="text-amber-400 font-bold text-sm mb-2">Deposit to Play</p>
+              <p className="text-amber-600 text-xs mb-3">
+                Each game costs {GAME_FEE} A0GI. Your balance: {balance ?? "0"} A0GI
+              </p>
+              <div className="flex items-center gap-2 justify-center mb-3">
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0.01"
+                  value={depositAmount}
+                  onChange={(e) => setDepositAmount(e.target.value)}
+                  className="bg-black/60 border border-amber-800 text-amber-300 text-xs rounded px-2 py-1 w-20 text-center"
+                />
+                <span className="text-amber-600 text-xs">A0GI</span>
+              </div>
+              <button
+                onClick={handleDeposit}
+                disabled={depositing}
+                className="bg-amber-800 text-amber-100 px-4 py-1.5 rounded border border-amber-600 font-bold text-xs tracking-wider uppercase hover:bg-amber-700 transition-colors disabled:opacity-50"
+              >
+                {depositing ? "Confirming..." : "Deposit"}
+              </button>
+            </div>
           </div>
         )}
 
@@ -644,12 +759,12 @@ export default function GamePage() {
             <div className="flex flex-col gap-2 shrink-0">
               <div className="flex gap-3 -mt-24 relative z-50">
                 {state.hand.map((card, i) => (
-                  <Card key={`${card}-${i}`} card={card} onPlay={playCard} disabled={state.turnInProgress || state.gameOver} />
+                  <Card key={`${card}-${i}`} card={card} onPlay={playCard} disabled={cardsDisabled} />
                 ))}
               </div>
               <button
                 onClick={reroll}
-                disabled={state.gold < REROLL_COST || state.turnInProgress || state.gameOver}
+                disabled={state.gold < REROLL_COST || cardsDisabled}
                 className="w-full bg-amber-900/60 text-amber-400 font-bold py-1.5 rounded border border-amber-800/60 text-xs tracking-wider uppercase disabled:opacity-25 hover:bg-amber-900/80 transition-colors"
               >
                 Shuffle Cards ({REROLL_COST}g)

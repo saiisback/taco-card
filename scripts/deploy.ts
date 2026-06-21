@@ -11,9 +11,18 @@ if (!PK) {
 }
 
 const abi = [
+  "constructor()",
+  "function deposit() external payable",
+  "function withdraw() external",
   "function recordGame(address player, bool won, uint256 heroHpLeft, uint256 bossHpLeft) external",
   "function getPlayerStats(address player) external view returns (uint256 wins, uint256 losses, uint256 gamesPlayed)",
+  "function getBalance(address player) external view returns (uint256)",
+  "function gameFee() external view returns (uint256)",
+  "function balances(address) external view returns (uint256)",
+  "function operator() external view returns (address)",
   "event GameRecorded(address indexed player, bool won, uint256 heroHpLeft, uint256 bossHpLeft, uint256 timestamp)",
+  "event Deposited(address indexed player, uint256 amount)",
+  "event Withdrawn(address indexed player, uint256 amount)",
 ];
 
 // Compiled bytecode for GameResults.sol (solc 0.8.20, no optimization)
@@ -83,11 +92,11 @@ async function main() {
   const contractFile = path.join(__dirname, "..", "lib", "gameContract.ts");
   let content = fs.readFileSync(contractFile, "utf-8");
   content = content.replace(
-    '0x0000000000000000000000000000000000000000',
-    address
+    /export const GAME_RESULTS_ADDRESS = "0x[0-9a-fA-F]+"/,
+    `export const GAME_RESULTS_ADDRESS = "${address}"`
   );
   fs.writeFileSync(contractFile, content);
-  console.log("Updated lib/gameContract.ts with deployed address.");
+  console.log("Updated lib/gameContract.ts with deployed address:", address);
 }
 
 main().catch((err) => {

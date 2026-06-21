@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { recordGameResult, getPlayerStats } from "@/lib/gameContract";
+import { recordGameResult, getPlayerStats, getPlayerBalance } from "@/lib/gameContract";
 import { txUrl } from "@/lib/0g";
 
 // ---------------------------------------------------------------------------
@@ -23,7 +23,8 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "player query param required" }, { status: 400 });
     }
     const stats = await getPlayerStats(player);
-    return NextResponse.json({ stats });
+    const balance = await getPlayerBalance(player);
+    return NextResponse.json({ stats, balance });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Unknown error";
     console.error("Failed to get player stats:", message);
@@ -42,8 +43,9 @@ export async function POST(req: NextRequest) {
 
     const txHash = await recordGameResult(playerAddress, won, heroHp, bossHp);
     const stats = await getPlayerStats(playerAddress);
+    const balance = await getPlayerBalance(playerAddress);
 
-    return NextResponse.json({ txHash, txExplorerUrl: txUrl(txHash), stats });
+    return NextResponse.json({ txHash, txExplorerUrl: txUrl(txHash), stats, balance });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Unknown error";
     console.error("Failed to record game:", message);
