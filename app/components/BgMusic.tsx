@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from "react";
 
 export default function BgMusic() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const [playing, setPlaying] = useState(false);
+  const [playing, setPlaying] = useState(true);
+  const startedRef = useRef(false);
 
   const getAudio = () => {
     if (!audioRef.current) {
@@ -16,14 +17,58 @@ export default function BgMusic() {
     return audioRef.current;
   };
 
-  const toggle = () => {
+  // Auto-play music on the first user interaction (browsers require a gesture)
+  useEffect(() => {
+    const tryPlay = () => {
+      if (startedRef.current) return;
+      startedRef.current = true;
+      const audio = getAudio();
+      audio.play().then(() => setPlaying(true)).catch(() => {
+        // If play still fails, reset so we can retry
+        startedRef.current = false;
+      });
+    };
+
+    window.addEventListener("click", tryPlay, { once: false });
+    window.addEventListener("keydown", tryPlay, { once: false });
+
+    // Also try immediately in case autoplay is allowed
+    const audio = getAudio();
+    audio.play().then(() => {
+      startedRef.current = true;
+      setPlaying(true);
+    }).catch(() => {
+      // Blocked by browser, will play on first interaction
+    });
+
+    return () => {
+      window.removeEventListener("click", tryPlay);
+      window.removeEventListener("keydown", tryPlay);
+    };
+  }, []);
+
+  // Sync pause/play when user toggles
+  useEffect(() => {
+    if (!startedRef.current) return;
     const audio = getAudio();
     if (playing) {
-      audio.pause();
-      setPlaying(false);
+      audio.play().catch(() => {});
     } else {
-      audio.play().then(() => setPlaying(true)).catch(console.error);
+      audio.pause();
     }
+  }, [playing]);
+
+  const toggle = () => {
+    if (!startedRef.current) {
+      // First interaction, start playing
+      const audio = getAudio();
+      audio.play().then(() => {
+        startedRef.current = true;
+        setPlaying(true);
+      }).catch(console.error);
+      return;
+    }
+    setPlaying((p) => !p);
   };
 
   return (
