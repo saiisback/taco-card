@@ -41,11 +41,21 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "playerAddress required" }, { status: 400 });
     }
 
+    const debug: string[] = [];
+    debug.push(`[Chain] Recording game: player=${playerAddress}, won=${won}, heroHp=${heroHp}, bossHp=${bossHp}`);
+    debug.push(`[Chain] Calling recordGame on contract...`);
+
     const txHash = await recordGameResult(playerAddress, won, heroHp, bossHp);
+    debug.push(`[Chain] Transaction signed & confirmed: ${txHash}`);
+    debug.push(`[Chain] Explorer: ${txUrl(txHash)}`);
+
+    debug.push(`[Chain] Fetching updated stats & balance...`);
     const stats = await getPlayerStats(playerAddress);
     const balance = await getPlayerBalance(playerAddress);
+    debug.push(`[Chain] Stats: W=${stats.wins} L=${stats.losses} Games=${stats.gamesPlayed}`);
+    debug.push(`[Chain] Balance: ${balance} A0GI`);
 
-    return NextResponse.json({ txHash, txExplorerUrl: txUrl(txHash), stats, balance });
+    return NextResponse.json({ txHash, txExplorerUrl: txUrl(txHash), stats, balance, debug });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Unknown error";
     console.error("Failed to record game:", message);
